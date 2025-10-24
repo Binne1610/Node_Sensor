@@ -1,4 +1,5 @@
 #include <ES_PH_SOIL.hpp>
+#include <esp_log.h>
 
 const char *ES_PH_SOIL::TAG = "ES_PH_SOIL";
 
@@ -12,11 +13,14 @@ ES_PH_SOIL::ES_PH_SOIL(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint
 
 esp_err_t ES_PH_SOIL::init() {
     uart_config_t uart_config = {
-        .baud_rate = baud_rate,
+        .baud_rate = static_cast<int>(baud_rate),
         .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
+        .parity    = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 122,
+        .source_clk = UART_SCLK_DEFAULT,
+        .flags = 0
         // .flow_ctrl = UART_HW_FLOWCTRL_RTS_CTS // Nếu sử dụng thì phải nối thêm chân RTS và CTS
                                                  // và phải khai báo trong thêm trong hàm uart_set_pin()
     };
