@@ -1,9 +1,10 @@
 #pragma once
 #include <driver/uart.h>
-#include <esp_log.h>
+#include <driver/gpio.h>
 #include <esp_err.h>
 #include <vector>
 #include <cstddef>
+#include <cstdint>
 
 class ES_PH_SOIL {
     private:
@@ -14,12 +15,12 @@ class ES_PH_SOIL {
         uint32_t baud_rate;
         static const char *TAG;
         
-        uint16_t crc16(const uint8_t *buf, uint16_t len);
+        static uint16_t crc16(const uint8_t *buf, uint16_t len);
         esp_err_t sendCommand(const std::vector<uint8_t> &cmd);
-        esp_err_t readResponse(std::vector<uint8_t> &resp, size_t len);
+        esp_err_t readResponse(std::vector<uint8_t> &resp, std::size_t len);
 
     public:
         ES_PH_SOIL(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint8_t addr = 0x01, uint32_t baud = 4800);
         esp_err_t init();
-        float readPH();
+        esp_err_t readPH(float& out);
 };

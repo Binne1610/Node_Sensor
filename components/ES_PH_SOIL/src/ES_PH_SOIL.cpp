@@ -45,7 +45,8 @@ uint16_t ES_PH_SOIL::crc16(const uint8_t *buf, uint16_t len) {
 }
 
 esp_err_t ES_PH_SOIL::sendCommand(const std::vector<uint8_t> &cmd){
-    (void)uart_flush_input((uart_port_t)uart_num); // Xoá bộ đệm truyền
+    // Xóa RX ring buffer trước khi gửi lệnh mới
+    (void)uart_flush_input(uart_num);
     int written = uart_write_bytes(uart_num, reinterpret_cast<const char*>(cmd.data()), cmd.size());
     if (written < 0 || static_cast<size_t>(written) != cmd.size()) {
         ESP_LOGE(TAG, "UART write failed (%d/%u bytes)", written, static_cast<unsigned>(cmd.size()));
@@ -55,51 +56,57 @@ esp_err_t ES_PH_SOIL::sendCommand(const std::vector<uint8_t> &cmd){
     return ESP_OK;
 }
 
-esp_err_t ES_PH_SOIL::readResponse(std::vector<uint8_t> &resp, size_t len) {
+esp_err_t ES_PH_SOIL::readResponse(std::vector<uint8_t> &resp, std::size_t len) {
     resp.resize(len);
     int read = uart_read_bytes(uart_num, resp.data(), len, pdMS_TO_TICKS(500));
-    if (read < 0 || static_cast<size_t>(read) != len) {
+    if (read < 0 || static_cast<std::size_t>(read) != len) {
         ESP_LOGE(TAG, "UART read failed (%d/%u bytes)", read, static_cast<unsigned>(len));
         return ESP_FAIL;
     }
     return ESP_OK;
 }
 
-float ES_PH_SOIL::readPH() {
+esp_err_t ES_PH_SOIL::readPH(float& out) {
+    // Modbus RTU: Read Holding Registers, 1 register tại 0x0000
     std::vector<uint8_t> cmd = {
         slave_addr,
-        0x03, // Function code: Read Holding Registers
-        0x00, 0x00, // Starting address Register
-        0x00, 0x01  // Number of registers to read
+        0x03,           // Function code: Read Holding Registers
+        0x00, 0x00,     // Starting address
+        0x00, 0x01      // Number of registers
     };
-    uint16_t crc = crc16(cmd.data(), cmd.size());
-    cmd.push_back(crc & 0xFF); // CRC Low byte
-    cmd.push_back(crc >> 8);   // CRC High byte
+    // Gắn CRC (little-endian: low byte trước)
+    uint16_t c = crc16(cmd.data(), static_cast<uint16_t>(cmd.size()));
+    cmd.push_back(static_cast<uint8_t>(c & 0xFF));
+    cmd.push_back(static_cast<uint8_t>((c >> 8) & 0xFF));
 
     if (sendCommand(cmd) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send Modbus command");
-        return -1.0f;
+        return ESP_FAIL;
     }
 
+    // Phản hồi mong đợi: 7 byte (addr, func, bytecount=2, dataH, dataL, crcL, crcH)
     std::vector<uint8_t> resp;
-    if (readResponse(resp, 7) != ESP_OK) { // Đọc 7 byte phản hồi (addr, function, byte count, data high, data low, CRC low, CRC high)
+    if (readResponse(resp, 7) != ESP_OK) {
         ESP_LOGE(TAG, "No response or read error from sensor");
-        return -1.0f;
+        return ESP_FAIL;
     }
 
-    // Phân tích dữ liệu phản hồi
-    if (resp.size() == 7) {
-        // Kiểm tra CRC
-        uint16_t crc = crc16(resp.data(), resp.size() - 2); // Tính CRC của dữ liệu nhận được (trừ 2 byte CRC)
-        if (crc != (resp[5] | (resp[6] << 8))) {
-            ESP_LOGE(TAG, "Invalid CRC in response");
-            return -1.0f;
-        }
-
-        // Chuyển đổi dữ liệu từ phản hồi
-        int16_t ph_raw = (resp[3] << 8) | resp[4]; // Kết hợp hai byte dữ liệu thành một giá trị 16-bit
-        return static_cast<float>(ph_raw) / 100.0f; // Chia cho 100 để có giá trị pH thực
+    // Kiểm tra cơ bản
+    if (resp.size() != 7 || resp[0] != slave_addr || resp[1] != 0x03 || resp[2] != 0x02) {
+        ESP_LOGE(TAG, "Invalid response header");
+        return ESP_FAIL;
     }
 
-    return -1.0f;
+    // Kiểm CRC
+    uint16_t calc = crc16(resp.data(), 5); // tính trên 5 byte đầu
+    uint16_t rx_crc = static_cast<uint16_t>(resp[5]) | (static_cast<uint16_t>(resp[6]) << 8);
+    if (calc != rx_crc) {
+        ESP_LOGE(TAG, "Invalid CRC in response");
+        return ESP_FAIL;
+    }
+
+    // Ghép dữ liệu 16-bit và scale ra pH
+    uint16_t ph_raw = static_cast<uint16_t>(resp[3] << 8) | static_cast<uint16_t>(resp[4]);
+    out = static_cast<float>(ph_raw) / 100.0f; 
+    return ESP_OK;
 }
