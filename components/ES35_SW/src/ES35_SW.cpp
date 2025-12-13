@@ -1,14 +1,14 @@
-#include <ES_PH_SOIL.hpp>
+#include <ES35_SW.hpp>
 #include <esp_log.h>
 #include "uart_shared.hpp"
 #include <algorithm>
 #include <esp_timer.h>
 #include <math.h>
-#include "esp_check.h"
+#include "esp_check.h"  
 
-const char *ES_PH_SOIL::TAG = "ES_PH_SOIL";
+const char *ES35_SW::TAG = "ES35_SW";
 
-ES_PH_SOIL::ES_PH_SOIL(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint8_t addr, uint32_t baud) {
+ES35_SW::ES35_SW(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint8_t addr, uint32_t baud) {
     this->uart_num = uart_port;
     this->tx_pin = tx;
     this->rx_pin = rx;
@@ -16,7 +16,7 @@ ES_PH_SOIL::ES_PH_SOIL(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint
     this->baud_rate = baud;
 }
 
-esp_err_t ES_PH_SOIL::init() {
+esp_err_t ES35_SW::init() {
     // Chỉ cấu hình và install UART driver nếu chưa được install
     if (!g_uart_installed[uart_num]) {
         uart_config_t uart_config = {
@@ -45,13 +45,13 @@ esp_err_t ES_PH_SOIL::init() {
     return ESP_OK;
 }
 
-uint16_t ES_PH_SOIL::crc16(const uint8_t *buf, uint16_t len) {
+uint16_t ES35_SW::crc16(const uint8_t *buf, uint16_t len) {
     uint16_t crc = 0xFFFF; // Giá trị bắt đầu mặc định của Modbus CRC16
     for (uint16_t i = 0; i < len; ++i) { // duyệt từng byte trong mảng dữ liệu
         crc ^= buf[i]; // XOR byte dữ liệu vào CRC
         for (int j = 0; j < 8; ++j) { // duyệt từng bit trong byte
             if (crc & 1) {
-                crc = (crc >> 1) ^ 0xA001;
+                crc = (uint16_t)((crc >> 1) ^ 0xA001);
             } else {
                 crc >>= 1;
             }
@@ -83,7 +83,7 @@ static esp_err_t uart_read_exact(uart_port_t uart, uint8_t* buf, size_t len, uin
 }
 
 // Lệnh 2 tầng truyền và nhận
-esp_err_t ES_PH_SOIL::sendCommand(const std::vector<uint8_t> &cmd){
+esp_err_t ES35_SW::sendCommand(const std::vector<uint8_t> &cmd){
     // Xóa RX ring buffer trước khi gửi lệnh mới
     (void)uart_flush_input(uart_num);
     int written = uart_write_bytes(uart_num, reinterpret_cast<const char*>(cmd.data()), cmd.size());
@@ -95,7 +95,7 @@ esp_err_t ES_PH_SOIL::sendCommand(const std::vector<uint8_t> &cmd){
     return ESP_OK;
 }
 
-esp_err_t ES_PH_SOIL::readResponse(std::vector<uint8_t> &resp, std::size_t len) {
+esp_err_t ES35_SW::readResponse(std::vector<uint8_t> &resp, std::size_t len) {
     resp.resize(len);
     uint32_t deadline_ms = (uint32_t)(esp_timer_get_time()/1000ULL) + 500; // 500ms tổng thời gian chờ
     int read = uart_read_exact(uart_num, resp.data(), len, deadline_ms);
@@ -109,26 +109,21 @@ esp_err_t ES_PH_SOIL::readResponse(std::vector<uint8_t> &resp, std::size_t len) 
 }
 
 static const uint16_t START_REG = 0x00;  // bắt đầu từ thanh ghi 0x0000
-static const uint16_t REG_QTY   = 1;     // đọc 1 thanh ghi (pH)
+static const uint16_t REG_QTY   = 2;     // đọc 2 thanh ghi (RH, Temp)
 
-esp_err_t ES_PH_SOIL::read_PH(float& pH) {
-        // Cú pháp truy vấn theo khung Modbus RTU: [ADDR] [FUNC] [REG_HI] [REG_LO] [LEN_HI] [LEN_LO] [CRC_LOW] [CRC_HIGH]
+// Helper: gửi và đọc frame nhiều thanh ghi liên tiếp
+esp_err_t ES35_SW::read_ES35_SW(float &RH, float &Temp) {
+    // Cú pháp truy vấn theo khung Modbus RTU: [ADDR] [FUNC] [REG_HI] [REG_LO] [LEN_HI] [LEN_LO] [CRC_LOW] [CRC_HIGH]
     uint8_t req[8] = {
         slave_addr,
-        0x03,           // Function code: Read Holding Registers
-        (uint8_t)(START_REG >> 8), (uint8_t)(START_REG & 0xFF), // Starting address
-        (uint8_t)(REG_QTY >> 8),    (uint8_t)(REG_QTY & 0xFF),  // Number of registers
+        0x03,
+        (uint8_t)(START_REG >> 8), (uint8_t)(START_REG & 0xFF),
+        (uint8_t)(REG_QTY >> 8),    (uint8_t)(REG_QTY & 0xFF),
         0x00, 0x00 // placeholder cho CRC
     };
-
-    // // Gắn CRC (little-endian: low byte trước)
-    // uint16_t c = crc16(cmd.data(), static_cast<uint16_t>(cmd.size()));
-    // cmd.push_back(static_cast<uint8_t>(c & 0xFF));
-    // cmd.push_back(static_cast<uint8_t>((c >> 8) & 0xFF));
-
     uint16_t c = crc16(req, 6);
-    req[6] = (uint8_t)(c & 0xFF); // CRC Low byte
-    req[7] = (uint8_t)((c >> 8) & 0xFF); // CRC High byte
+    req[6] = (uint8_t)(c & 0xFF);
+    req[7] = (uint8_t)(c >> 8);
 
     // Gửi
     ESP_RETURN_ON_ERROR(uart_flush_input(uart_num), TAG, "flush fail");
@@ -141,7 +136,8 @@ esp_err_t ES_PH_SOIL::read_PH(float& pH) {
 
     vTaskDelay(pdMS_TO_TICKS(interchar_gap_ms(baud_rate)));
 
-    uint8_t resp[7]; // addr func byteCount data(2) crc(2) 
+    // Phản hồi mong đợi: 5 + số thanh ghi x 2 (addr, func, bytecount, dataH, dataL, crcL, crcH)
+    uint8_t resp[9]; // addr func byteCount data(4) crc(2) = 9
     uint32_t deadline_ms = (uint32_t)(esp_timer_get_time()/1000ULL) + 300;
     esp_err_t err = uart_read_exact(uart_num, resp, sizeof(resp), deadline_ms);
     if (err != ESP_OK) {
@@ -155,21 +151,23 @@ esp_err_t ES_PH_SOIL::read_PH(float& pH) {
         return ESP_FAIL;
     }
 
-    if (resp[0] != slave_addr || resp[1] != 0x03 || resp[2] != 0x02) {
+    if (resp[0] != slave_addr || resp[1] != 0x03 || resp[2] != 0x04) {
         ESP_LOGE(TAG, "Header invalid (%02X %02X %02X)", resp[0], resp[1], resp[2]);
         return ESP_FAIL;
     }
 
-    uint16_t calc = crc16(resp, 5);
-    uint16_t rx_crc = (uint16_t)resp[5] | ((uint16_t)resp[6] << 8);
+    uint16_t calc = crc16(resp, 7);
+    uint16_t rx_crc = (uint16_t)resp[7] | ((uint16_t)resp[8] << 8);
     if (calc != rx_crc) {
         ESP_LOGE(TAG, "CRC mismatch calc=%04X recv=%04X", calc, rx_crc);
         return ESP_FAIL;
     }
 
-    uint16_t pH_raw = ((uint16_t)resp[3] << 8 | resp[4]);
-    pH = pH_raw / 10.0f;
-
-    ESP_LOGD(TAG, " pH_raw=%u pH=%.1f", pH_raw, pH);
+    uint16_t temp_raw = ((uint16_t)resp[3] << 8) | resp[4];
+    uint16_t rh_raw   = ((uint16_t)resp[5] << 8) | resp[6];
+    Temp = temp_raw / 10.0f;
+    RH   = rh_raw   / 10.0f;
+    
+    ESP_LOGD(TAG, "Temp_raw=%u RH_raw=%u Temp=%.1f RH=%.1f", temp_raw, rh_raw, Temp, RH);
     return ESP_OK;
 }

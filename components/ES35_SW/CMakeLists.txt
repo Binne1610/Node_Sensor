@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "src/ES_SM_THEC.cpp"
+    SRCS "src/ES35_SW.cpp"
     INCLUDE_DIRS "include"
     PRIV_REQUIRES esp_driver_uart esp_driver_gpio esp_timer uart_shared
 )

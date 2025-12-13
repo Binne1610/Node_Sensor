@@ -8,6 +8,7 @@
 
 class ES_PH_SOIL {
     private:
+        /// @brief 
         uart_port_t uart_num;
         gpio_num_t tx_pin;
         gpio_num_t rx_pin;
@@ -20,7 +21,7 @@ class ES_PH_SOIL {
         esp_err_t readResponse(std::vector<uint8_t> &resp, std::size_t len);
 
     public:
-        ES_PH_SOIL(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint8_t addr = 0x01, uint32_t baud = 4800);
+        ES_PH_SOIL(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint8_t addr = 0x03, uint32_t baud = 9600);
         esp_err_t init();
-        esp_err_t readPH(float& out);
+        esp_err_t read_PH(float& pH);
 };
