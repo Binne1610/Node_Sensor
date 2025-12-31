@@ -438,9 +438,13 @@ esp_err_t LoRa_SX1278_basicInit() {
     LoRa_SX1278_writeReg(0x08, (uint8_t)(frf>>0));   // RegFrfLsb
 
     // Set SF7, BW=125kHz, CR=4/5
-    LoRa_SX1278_writeReg(0x1D, 0x72);  // RegModemConfig1
+    LoRa_SX1278_writeReg(0x1D, 0x72);  // RegModemConfig1: BW=125kHz, CR=4/5, Explicit Header
     LoRa_SX1278_writeReg(0x1E, 0x74);  // RegModemConfig2 (SF7<<4 | CRC_ON)
     LoRa_SX1278_writeReg(0x26, 0x04);  // RegModemConfig3
+
+    // Set Preamble Length to 8 (default, khớp với Raspberry Pi)
+    LoRa_SX1278_writeReg(0x20, 0x00);  // RegPreambleMsb
+    LoRa_SX1278_writeReg(0x21, 0x08);  // RegPreambleLsb = 8
 
     // Set Sync Word (0x34 = LoRaWAN public network, khớp với Raspberry)
     ret = LoRa_SX1278_writeReg(0x39, 0x34); // RegSyncWord
@@ -512,6 +516,13 @@ esp_err_t LoRa_SX1278_send(const uint8_t *data, size_t length) {
         return ret;
     }
 
+    // Set FIFO TX base address to 0
+    ret = LoRa_SX1278_writeReg(0x0E, 0x00); // RegFifoTxBaseAddr = 0
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set FIFO TX base: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
     // Write payload length
     ret = LoRa_SX1278_writeReg(0x22, length); // RegPayloadLength
     if (ret != ESP_OK) {
@@ -520,11 +531,14 @@ esp_err_t LoRa_SX1278_send(const uint8_t *data, size_t length) {
     }
 
     // Write data to FIFO
+    ESP_LOGI(TAG, "Writing %d bytes to FIFO", length);
+    ESP_LOG_BUFFER_HEX(TAG, data, length); // Debug: hiển thị dữ liệu gốc
     ret = LoRa_SX1278_writeBuffer(0x00, data, length); // RegFifo address = 0x00
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write data to FIFO: %s", esp_err_to_name(ret));
         return ret;
     }
+    ESP_LOGI(TAG, "Data written to FIFO successfully");
 
     // Set to TX mode
     ret = LoRa_SX1278_writeReg(0x01, 0x83); // RegOpMode: Long Range Mode + TX

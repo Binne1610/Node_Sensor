@@ -1,3 +1,6 @@
+#ifndef LORA_SX1278_HPP
+#define LORA_SX1278_HPP
+
 #pragma once
 #include <stdint.h>
 #include <driver/spi_master.h>
@@ -56,3 +59,5 @@ public:
     uint8_t getMode() { return LoRa_SX1278_getMode(); }
     int getRSSI() { return LoRa_SX1278_getRSSI(); }
 };
+
+#endif // LORA_SX1278_HPP
