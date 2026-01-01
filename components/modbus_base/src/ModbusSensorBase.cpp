@@ -134,6 +134,44 @@ esp_err_t ModbusSensorBase::modbusReadHolding(uint16_t reg_addr, uint16_t reg_co
     return ESP_OK;
 }
 
+esp_err_t ModbusSensorBase::modbusReadInput(uint16_t reg_addr, uint16_t reg_count, 
+                                              uint8_t* response, size_t resp_len) {
+    uint8_t cmd[8];
+    cmd[0] = slave_addr;
+    cmd[1] = 0x04; // Function code: Read Input Registers
+    cmd[2] = static_cast<uint8_t>(reg_addr >> 8);
+    cmd[3] = static_cast<uint8_t>(reg_addr & 0xFF);
+    cmd[4] = static_cast<uint8_t>(reg_count >> 8);
+    cmd[5] = static_cast<uint8_t>(reg_count & 0xFF);
+    
+    uint16_t crc = crc16(cmd, 6);
+    cmd[6] = static_cast<uint8_t>(crc & 0xFF);
+    cmd[7] = static_cast<uint8_t>(crc >> 8);
+    
+    // Send command
+    esp_err_t err = sendCommand(cmd, 8);
+    if (err != ESP_OK) return err;
+    
+    // Wait inter-frame gap
+    vTaskDelay(pdMS_TO_TICKS(interchar_gap_ms(baud_rate)));
+    
+    // Read response
+    err = readResponse(response, resp_len);
+    if (err != ESP_OK) return err;
+    
+    // Verify CRC
+    uint16_t recv_crc = static_cast<uint16_t>(response[resp_len - 2] | (response[resp_len - 1] << 8));
+    uint16_t calc_crc = crc16(response, resp_len - 2);
+    
+    if (recv_crc != calc_crc) {
+        ESP_LOGE(TAG, "CRC error: recv=0x%04X calc=0x%04X", recv_crc, calc_crc);
+        stats.crc_error_count++;
+        return ESP_ERR_INVALID_CRC;
+    }
+    
+    return ESP_OK;
+}
+
 esp_err_t ModbusSensorBase::executeWithRetry(esp_err_t (*func)(void*), void* param, uint8_t max_retries) {
     for (uint8_t i = 0; i < max_retries; i++) {
         esp_err_t err = func(param);

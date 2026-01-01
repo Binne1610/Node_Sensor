@@ -56,6 +56,9 @@ protected:
     // Read Modbus Holding Registers (Function Code 0x03)
     esp_err_t modbusReadHolding(uint16_t reg_addr, uint16_t reg_count, uint8_t* response, size_t resp_len);
     
+    // Read Modbus Input Registers (Function Code 0x04)
+    esp_err_t modbusReadInput(uint16_t reg_addr, uint16_t reg_count, uint8_t* response, size_t resp_len);
+    
     // Retry wrapper
     esp_err_t executeWithRetry(esp_err_t (*func)(void*), void* param, uint8_t max_retries = 3);
 
