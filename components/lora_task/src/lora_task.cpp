@@ -42,12 +42,22 @@ void lora_transmission_task(void *parameter) {
             );
             xSemaphoreGive(gDataMutex);
             
-            // Gửi qua LoRa
-            esp_err_t err = lora->send(reinterpret_cast<const uint8_t*>(message), strlen(message));
-            if (err == ESP_OK) {
-                ESP_LOGI(TAG, "Sensor data sent: %s", message);
-            } else {
-                ESP_LOGE(TAG, "Failed to send message");
+            // Gửi gói với retry mechanism (2 lần) để tăng độ tin cậy
+            bool sent_success = false;
+            for (int retry = 0; retry < 2; retry++) {
+                esp_err_t err = lora->send(reinterpret_cast<const uint8_t*>(message), strlen(message));
+                if (err == ESP_OK) {
+                    ESP_LOGI(TAG, "Sensor data sent (attempt %d): %s", retry + 1, message);
+                    sent_success = true;
+                    break;
+                } else {
+                    ESP_LOGW(TAG, "Failed to send (attempt %d), retrying...", retry + 1);
+                    vTaskDelay(pdMS_TO_TICKS(200)); // Đợi 200ms trước khi gửi lại
+                }
+            }
+            
+            if (!sent_success) {
+                ESP_LOGE(TAG, "Failed to send message after 2 attempts");
             }
         } else {
             ESP_LOGW(TAG, "Cannot access sensor data - mutex timeout");

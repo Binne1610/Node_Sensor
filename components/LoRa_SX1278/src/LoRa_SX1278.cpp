@@ -437,9 +437,9 @@ esp_err_t LoRa_SX1278_basicInit() {
     LoRa_SX1278_writeReg(0x07, (uint8_t)(frf>>8));   // RegFrfMid
     LoRa_SX1278_writeReg(0x08, (uint8_t)(frf>>0));   // RegFrfLsb
 
-    // Set SF7, BW=125kHz, CR=4/5
+    // Set SF9, BW=125kHz, CR=4/5 (Tăng SF để cải thiện độ nhạy)
     LoRa_SX1278_writeReg(0x1D, 0x72);  // RegModemConfig1: BW=125kHz, CR=4/5, Explicit Header
-    LoRa_SX1278_writeReg(0x1E, 0x74);  // RegModemConfig2 (SF7<<4 | CRC_ON)
+    LoRa_SX1278_writeReg(0x1E, 0x94);  // RegModemConfig2 (SF9<<4 | CRC_ON) - SF9 thay vì SF7
     LoRa_SX1278_writeReg(0x26, 0x04);  // RegModemConfig3
 
     // Set Preamble Length to 8 (default, khớp với Raspberry Pi)
@@ -453,12 +453,20 @@ esp_err_t LoRa_SX1278_basicInit() {
         return ret;
     }
 
-    // Set PA_CONFIG: PA_BOOST with max power (17dBm)
+    // Set PA_CONFIG: PA_BOOST with MAX power (20dBm) - Tăng từ 17dBm lên 20dBm
     // RegPaConfig (0x09): bit 7=1 (PA_BOOST), bit 6-4: MaxPower=111 (7), bit 3-0: OutputPower=1111 (15)
-    // OutputPower = 17 - (15-OutputPower) = 17dBm when OutputPower=15
+    // Với PA_BOOST: Pout = 17 - (15 - OutputPower), khi OutputPower=15 -> Pout=17dBm
+    // Để đạt 20dBm cần thêm RegPaDac=0x87
     ret = LoRa_SX1278_writeReg(0x09, 0xFF); // RegPaConfig: PA_BOOST, MaxPower=7, OutputPower=15
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set PA config: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Enable +20dBm mode (High Power Mode)
+    ret = LoRa_SX1278_writeReg(0x4D, 0x87); // RegPaDac: Enable +20dBm on PA_BOOST
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable high power mode: %s", esp_err_to_name(ret));
         return ret;
     }
 
