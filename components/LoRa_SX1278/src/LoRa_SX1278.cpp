@@ -453,25 +453,27 @@ esp_err_t LoRa_SX1278_basicInit() {
         return ret;
     }
 
-    // Set PA_CONFIG: PA_BOOST with MAX power (20dBm) - Tăng từ 17dBm lên 20dBm
-    // RegPaConfig (0x09): bit 7=1 (PA_BOOST), bit 6-4: MaxPower=111 (7), bit 3-0: OutputPower=1111 (15)
-    // Với PA_BOOST: Pout = 17 - (15 - OutputPower), khi OutputPower=15 -> Pout=17dBm
-    // Để đạt 20dBm cần thêm RegPaDac=0x87
-    ret = LoRa_SX1278_writeReg(0x09, 0xFF); // RegPaConfig: PA_BOOST, MaxPower=7, OutputPower=15
+    // Set PA_CONFIG: PA_BOOST with 12dBm (tiết kiệm pin, phù hợp khoảng cách gần-trung bình)
+    // RegPaConfig (0x09): bit 7=1 (PA_BOOST), bit 6-4: MaxPower=111 (7), bit 3-0: OutputPower
+    // Công thức PA_BOOST: Pout = 17 - (15 - OutputPower)
+    // OutputPower=10 -> Pout=12dBm
+    ret = LoRa_SX1278_writeReg(0x09, 0xFA); // RegPaConfig: PA_BOOST, MaxPower=7, OutputPower=10 (12dBm)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set PA config: %s", esp_err_to_name(ret));
         return ret;
     }
     
-    // Enable +20dBm mode (High Power Mode)
-    ret = LoRa_SX1278_writeReg(0x4D, 0x87); // RegPaDac: Enable +20dBm on PA_BOOST
+    // KHÔNG enable +20dBm mode (module chỉ hỗ trợ max 18dBm)
+    // Giữ RegPaDac ở giá trị mặc định 0x84 thay vì 0x87
+    ret = LoRa_SX1278_writeReg(0x4D, 0x84); // RegPaDac: Default mode (max 17dBm)
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to enable high power mode: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to set PA DAC: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    // Set Over Current Protection (OCP) to 240mA (recommended for PA_BOOST)
-    ret = LoRa_SX1278_writeReg(0x0B, 0x3B); // RegOcp: OcpOn=1, OcpTrim=27 (240mA)
+    // Set Over Current Protection (OCP) to 100mA (phù hợp cho 12dBm, tiết kiệm pin tối đa)
+    // OcpTrim = 11 -> 100mA
+    ret = LoRa_SX1278_writeReg(0x0B, 0x2B); // RegOcp: OcpOn=1, OcpTrim=11 (100mA)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set OCP: %s", esp_err_to_name(ret));
         return ret;

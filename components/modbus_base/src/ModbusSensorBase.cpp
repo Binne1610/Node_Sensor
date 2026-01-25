@@ -1,5 +1,4 @@
 #include "ModbusSensorBase.hpp"
-#include "uart_shared.hpp"
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <math.h>
@@ -12,25 +11,37 @@ ModbusSensorBase::ModbusSensorBase(uart_port_t uart_port, gpio_num_t tx, gpio_nu
 }
 
 esp_err_t ModbusSensorBase::init() {
-    // Only configure and install UART driver if not already installed
-    if (!g_uart_installed[uart_num]) {
-        uart_config_t uart_config;
-        uart_config.baud_rate = static_cast<int>(baud_rate);
-        uart_config.data_bits = UART_DATA_8_BITS;
-        uart_config.parity = UART_PARITY_DISABLE;
-        uart_config.stop_bits = UART_STOP_BITS_1;
-        uart_config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-        uart_config.rx_flow_ctrl_thresh = 122;
-        uart_config.source_clk = UART_SCLK_DEFAULT;
+    // Configure UART
+    uart_config_t uart_config = {};
+    uart_config.baud_rate = static_cast<int>(baud_rate);
+    uart_config.data_bits = UART_DATA_8_BITS;
+    uart_config.parity = UART_PARITY_DISABLE;
+    uart_config.stop_bits = UART_STOP_BITS_1;
+    uart_config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    uart_config.rx_flow_ctrl_thresh = 122;
+    uart_config.source_clk = UART_SCLK_DEFAULT;
 
-        ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
-        ESP_ERROR_CHECK(uart_set_pin(uart_num, tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-        ESP_ERROR_CHECK(uart_driver_install(uart_num, 2048, 2048, 0, NULL, 0));
-        
-        g_uart_installed[uart_num] = true;
+    esp_err_t ret = uart_param_config(uart_num, &uart_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "UART param config failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    ret = uart_set_pin(uart_num, tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "UART set pin failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Install driver only if not already installed
+    ret = uart_driver_install(uart_num, 2048, 2048, 0, NULL, 0);
+    if (ret == ESP_OK) {
         ESP_LOGI(TAG, "UART initialized on port %d, TX=%d, RX=%d", uart_num, tx_pin, rx_pin);
-    } else {
+    } else if (ret == ESP_ERR_INVALID_STATE) {
         ESP_LOGI(TAG, "UART port %d already initialized", uart_num);
+    } else {
+        ESP_LOGE(TAG, "UART init failed: %s", esp_err_to_name(ret));
+        return ret;
     }
     
     return ESP_OK;
