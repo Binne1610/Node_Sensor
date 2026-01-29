@@ -69,8 +69,8 @@ private:
     static constexpr gpio_num_t RTC_INT_PIN = GPIO_NUM_35;  // SQW/INT pin wake ESP32
     
     // WiFi credentials cho NTP sync
-    static constexpr const char* WIFI_SSID = "Quy tang 5";
-    static constexpr const char* WIFI_PASSWORD = "24012004";
+    static constexpr const char* WIFI_SSID = "NhaCuaChuoi";
+    static constexpr const char* WIFI_PASSWORD = "12356789";
     static constexpr const char* NTP_SERVER = "pool.ntp.org";
     static constexpr const char* TIMEZONE = "UTC-7";  // Vietnam UTC+7
     

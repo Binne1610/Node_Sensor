@@ -232,6 +232,10 @@ esp_err_t LoRa_SX1278_readBuffer(uint8_t reg, uint8_t *buffer, size_t length) {
             break;
         }
 
+        // ✅ SAO CHÉP dữ liệu từ RX buffer vào output buffer
+        // Bỏ byte đầu tiên (dummy byte từ slave khi nhận địa chỉ)
+        memcpy(&buffer[offset], &LoRa_RX_buf[1], chunk);
+
         offset += chunk;
     }
     xSemaphoreGive(LoRa_spi_mutex);
@@ -239,8 +243,8 @@ esp_err_t LoRa_SX1278_readBuffer(uint8_t reg, uint8_t *buffer, size_t length) {
 }
 
 // Set LoRa mode
-esp_err_t LoRa_SX1278_setMode(uint8_t mode1, uint8_t mode2) {
-    return LoRa_SX1278_writeReg(mode1, mode2);
+esp_err_t LoRa_SX1278_setMode(uint8_t mode) {
+    return LoRa_SX1278_writeReg(0x01, mode);
 }
 
 // Get current LoRa mode
@@ -265,11 +269,27 @@ void IRAM_ATTR dio0_isr_handler(void* arg) {
 
 // Reset LoRa module
 esp_err_t LoRa_SX1278_resetHW() {
+    ESP_LOGI(TAG, "=== HARDWARE RESET DEBUG ===");
+    
+    // Test GPIO trước khi reset
     gpio_set_direction(LoRa_SX1278_PIN_RESET, GPIO_MODE_OUTPUT);
+    gpio_set_direction(LoRa_SX1278_PIN_CS, GPIO_MODE_OUTPUT);
+    
+    // Test CS pin
+    gpio_set_level(LoRa_SX1278_PIN_CS, 1); // CS HIGH (không chọn chip)
+    ESP_LOGI(TAG, "CS pin set to HIGH");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    // Reset sequence
+    ESP_LOGI(TAG, "Pulling RESET LOW...");
     gpio_set_level(LoRa_SX1278_PIN_RESET, 0);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(20)); // Tăng thời gian reset
+    
+    ESP_LOGI(TAG, "Pulling RESET HIGH...");
     gpio_set_level(LoRa_SX1278_PIN_RESET, 1);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(20)); // Tăng thời gian ổn định
+    
+    ESP_LOGI(TAG, "Reset complete, module should be in sleep mode");
     return ESP_OK;
 }
 
@@ -277,16 +297,24 @@ esp_err_t LoRa_SX1278_resetHW() {
 esp_err_t LoRa_SX1278_init() {
     esp_err_t ret;
 
-    // Cấp phát bộ nhớ cho mutex và buffer
-    LoRa_spi_mutex = xSemaphoreCreateMutex();
-    LoRa_buf_size = LoRa_MAX_SPI_TRANSFER_SIZE;
-
-    LoRa_TX_buf = (uint8_t*)heap_caps_malloc(LoRa_buf_size, MALLOC_CAP_DMA);
-    LoRa_RX_buf = (uint8_t*)heap_caps_malloc(LoRa_buf_size, MALLOC_CAP_DMA);
-
+    // Cấp phát bộ nhớ cho mutex và buffer (chỉ khi chưa tồn tại)
     if (LoRa_spi_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create SPI mutex");
-        return ESP_ERR_NO_MEM;
+        LoRa_spi_mutex = xSemaphoreCreateMutex();
+        if (LoRa_spi_mutex == NULL) {
+            ESP_LOGE(TAG, "Failed to create SPI mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (LoRa_TX_buf == NULL) {
+        LoRa_buf_size = LoRa_MAX_SPI_TRANSFER_SIZE;
+        LoRa_TX_buf = (uint8_t*)heap_caps_malloc(LoRa_buf_size, MALLOC_CAP_DMA);
+        LoRa_RX_buf = (uint8_t*)heap_caps_malloc(LoRa_buf_size, MALLOC_CAP_DMA);
+        
+        if (LoRa_TX_buf == NULL || LoRa_RX_buf == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate DMA buffers");
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     // SPI bus configuration
@@ -298,8 +326,14 @@ esp_err_t LoRa_SX1278_init() {
     buscfg.quadwp_io_num = -1;
     buscfg.quadhd_io_num = -1;
     buscfg.max_transfer_sz = 4096;
+    
+    // Kiểm tra nếu SPI bus đã được khởi tạo
     ret = spi_bus_initialize(LoRa_SX1278_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
-    if (ret != ESP_OK) {
+    if (ret == ESP_ERR_INVALID_STATE) {
+        // SPI bus đã tồn tại, bỏ qua lỗi này
+        ESP_LOGW(TAG, "SPI bus already initialized, reusing existing bus");
+        ret = ESP_OK;
+    } else if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
         return ret;
     }
@@ -311,10 +345,16 @@ esp_err_t LoRa_SX1278_init() {
     devcfg.mode = 0;
     devcfg.spics_io_num = LoRa_SX1278_PIN_CS;
     devcfg.queue_size = 3;
-    ret = spi_bus_add_device(LoRa_SX1278_SPI_HOST, &devcfg, &spi_dev);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add SPI device: %s", esp_err_to_name(ret));
-        return ret;
+    
+    // Chỉ add device nếu chưa tồn tại
+    if (spi_dev == NULL) {
+        ret = spi_bus_add_device(LoRa_SX1278_SPI_HOST, &devcfg, &spi_dev);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add SPI device: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    } else {
+        ESP_LOGW(TAG, "SPI device already exists, reusing");
     }
 
     // init GPIO
@@ -344,17 +384,36 @@ esp_err_t LoRa_SX1278_init() {
     // reset chip
     LoRa_SX1278_resetHW();
 
-    // create queue for DIO0 interrupt
-    dio0_queue = xQueueCreate(10, sizeof(uint32_t)); // Tạo hàng đợi để chứa tối đa 10 mục, mỗi mục là một giá trị uint32_t
-                                                     // ISR sẽ gửi (xQueueSendFromISR) vào queue này khi DIO0 ngắt xảy ra
+    // create queue for DIO0 interrupt (chỉ khi chưa tồn tại)
     if (dio0_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create DIO0 queue");
-        return ESP_ERR_NO_MEM;
+        dio0_queue = xQueueCreate(10, sizeof(uint32_t)); // Tạo hàng đợi để chứa tối đa 10 mục, mỗi mục là một giá trị uint32_t
+                                                         // ISR sẽ gửi (xQueueSendFromISR) vào queue này khi DIO0 ngắt xảy ra
+        if (dio0_queue == NULL) {
+            ESP_LOGE(TAG, "Failed to create DIO0 queue");
+            return ESP_ERR_NO_MEM;
+        }
     }
-    // install GPIO ISR service
-    gpio_install_isr_service(0); // 0 = default interrupt allocation (không dùng flag đặc biệt)
+    
+    // install GPIO ISR service (có thể đã được cài đặt)
+    ret = gpio_install_isr_service(0); // 0 = default interrupt allocation (không dùng flag đặc biệt)
+    if (ret == ESP_ERR_INVALID_STATE) {
+        // ISR service đã tồn tại, bỏ qua
+        ESP_LOGW(TAG, "GPIO ISR service already installed");
+        ret = ESP_OK;
+    } else if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install GPIO ISR service: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
     // attach DIO0 interrupt handler
     ret = gpio_isr_handler_add(LoRa_SX1278_PIN_DIO0, dio0_isr_handler, (void*)LoRa_SX1278_PIN_DIO0);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        // Handler đã tồn tại, xóa rồi thêm lại
+        ESP_LOGW(TAG, "DIO0 ISR handler already exists, removing and re-adding");
+        gpio_isr_handler_remove(LoRa_SX1278_PIN_DIO0);
+        ret = gpio_isr_handler_add(LoRa_SX1278_PIN_DIO0, dio0_isr_handler, (void*)LoRa_SX1278_PIN_DIO0);
+    }
+    
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to add DIO0 ISR handler: %s", esp_err_to_name(ret));
         return ret;
@@ -377,8 +436,18 @@ esp_err_t LoRa_SX1278_checkVersion(uint8_t *version) {
     uint8_t test_regs[5];
     ESP_LOGI(TAG, "=== DEBUG: Testing SPI communication ===");
     
+    // Test write/read
+    ESP_LOGI(TAG, "Step 1: Test writing to RegOpMode...");
+    esp_err_t ret = LoRa_SX1278_writeReg(0x01, 0x00); // Sleep mode
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write RegOpMode: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    ESP_LOGI(TAG, "Step 2: Reading back registers...");
     LoRa_SX1278_readReg(0x01, &test_regs[0]); // RegOpMode
-    ESP_LOGI(TAG, "RegOpMode (0x01): 0x%02X", test_regs[0]);
+    ESP_LOGI(TAG, "RegOpMode (0x01): 0x%02X (expect: 0x00 or 0x08)", test_regs[0]);
     
     LoRa_SX1278_readReg(0x06, &test_regs[1]); // RegFrfMsb
     ESP_LOGI(TAG, "RegFrfMsb (0x06): 0x%02X", test_regs[1]);
@@ -386,16 +455,36 @@ esp_err_t LoRa_SX1278_checkVersion(uint8_t *version) {
     LoRa_SX1278_readReg(0x39, &test_regs[2]); // RegSyncWord
     ESP_LOGI(TAG, "RegSyncWord (0x39): 0x%02X", test_regs[2]);
     
-    esp_err_t ret = LoRa_SX1278_readReg(0x42, version); // RegVersion address = 0x42
+    ret = LoRa_SX1278_readReg(0x42, version); // RegVersion address = 0x42
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read version register: %s", esp_err_to_name(ret));
         return ret;
     }
-    ESP_LOGI(TAG, "LoRa SX1278 version (0x42): 0x%02X", *version);
+    ESP_LOGI(TAG, "LoRa SX1278 version (0x42): 0x%02X (expect: 0x12)", *version);
+    
+    // Kiểm tra pattern 0xFF (MISO floating - không kết nối)
+    if (*version == 0xFF && test_regs[0] == 0xFF && test_regs[1] == 0xFF && test_regs[2] == 0xFF) {
+        ESP_LOGE(TAG, "=== ALL REGISTERS = 0xFF ===");
+        ESP_LOGE(TAG, "This means MISO line is floating (not connected or module not powered)!");
+        ESP_LOGE(TAG, "");
+        ESP_LOGE(TAG, "CHECK:");
+        ESP_LOGE(TAG, "  1. Module power: 3.3V connected?");
+        ESP_LOGE(TAG, "  2. MISO wire: GPIO13 connected to module MISO?");
+        ESP_LOGE(TAG, "  3. MOSI wire: GPIO11 connected to module MOSI?");
+        ESP_LOGE(TAG, "  4. SCK wire:  GPIO12 connected to module SCK?");
+        ESP_LOGE(TAG, "  5. CS wire:   GPIO10 connected to module NSS/CS?");
+        ESP_LOGE(TAG, "  6. RESET wire: GPIO14 connected to module RST?");
+        ESP_LOGE(TAG, "  7. Module type: Is this really SX1278/SX1276?");
+        ESP_LOGE(TAG, "");
+        ESP_LOGE(TAG, "Using multimeter:");
+        ESP_LOGE(TAG, "  - Measure 3.3V on module VCC pin");
+        ESP_LOGE(TAG, "  - Check continuity: ESP32 GPIO <-> Module pin");
+        return ESP_ERR_NOT_FOUND;
+    }
     
     // Kiểm tra tất cả thanh ghi có phải 0x00 không
     if (*version == 0x00 && test_regs[0] == 0x00 && test_regs[1] == 0x00) {
-        ESP_LOGE(TAG, "All registers read 0x00 -> SPI communication failure!");
+        ESP_LOGE(TAG, "All registers read 0x00 -> Module in RESET or SPI problem");
         ESP_LOGE(TAG, "Check: 1) Wiring (MOSI/MISO/SCK/CS)");
         ESP_LOGE(TAG, "       2) Module power (3.3V)");
         ESP_LOGE(TAG, "       3) Reset pin connection");
