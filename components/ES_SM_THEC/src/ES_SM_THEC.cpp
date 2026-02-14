@@ -5,7 +5,7 @@ ES_SM_THEC::ES_SM_THEC(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint
     : ModbusSensorBase(uart_port, tx, rx, addr, baud, "ES_SM_THEC") {
 }
 
-esp_err_t ES_SM_THEC::read_THEC(float& RH, float& Temperature, float& EC) {
+esp_err_t ES_SM_THEC::read_THEC(float& Temperature, float& RH, float& EC) {
     uint8_t resp[11]; // [addr][func][count][data1_hi][data1_lo][data2_hi][data2_lo][data3_hi][data3_lo][crc_lo][crc_hi]
     
     esp_err_t err = modbusReadHolding(THEC_REG_ADDR, THEC_REG_COUNT, resp, sizeof(resp));
@@ -21,13 +21,13 @@ esp_err_t ES_SM_THEC::read_THEC(float& RH, float& Temperature, float& EC) {
         return ESP_FAIL;
     }
     
-    // Parse 3 register values
+    // Parse 3 register values (reg0=RH, reg1=Temp, reg2=EC theo datasheet)
     uint16_t RH_raw = (static_cast<uint16_t>(resp[3]) << 8) | resp[4];
     uint16_t Temp_raw = (static_cast<uint16_t>(resp[5]) << 8) | resp[6];
     uint16_t EC_raw = (static_cast<uint16_t>(resp[7]) << 8) | resp[8];
     
-    RH = RH_raw / 10.0f;
     Temperature = Temp_raw / 10.0f;
+    RH = RH_raw / 10.0f;
     EC = EC_raw / 100.0f;
     
     // Update statistics with average of 3 values

@@ -8,5 +8,5 @@ private:
 
 public:
     ES_SM_THEC(uart_port_t uart_port, gpio_num_t tx, gpio_num_t rx, uint8_t addr = 0x02, uint32_t baud = 9600);
-    esp_err_t read_THEC(float& RH, float& Temperature, float& EC);
+    esp_err_t read_THEC(float& Temperature, float& RH, float& EC);
 };

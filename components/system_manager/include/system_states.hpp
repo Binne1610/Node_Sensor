@@ -24,7 +24,7 @@ struct SystemContext {
     ErrorType last_error;
     uint32_t sleep_interval_sec;
     
-    // Multi-Stage Sensor Reading
-    uint32_t read_cycle_count;    // Track wake cycles (0-5)
-    bool read_full_sensors;       // true = all sensors, false = pH only
+    // BACKUP - Multi-Stage (không dùng, giữ lại để sau có thể enable)
+    // uint32_t read_cycle_count;
+    // bool read_full_sensors;
 };

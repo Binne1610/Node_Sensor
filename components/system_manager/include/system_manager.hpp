@@ -56,12 +56,12 @@ private:
     // Config
     static constexpr uint32_t WATCHDOG_TIMEOUT_SEC = 60;
     static constexpr uint32_t MAX_ERROR_COUNT = 5;
-    static constexpr uint32_t DEFAULT_SLEEP_SEC = 60;  // 1 phút
+    static constexpr uint32_t DEFAULT_SLEEP_SEC = 10;  // 1 tiếng (3600 giây)
     static constexpr uint32_t ERROR_RETRY_DELAY_MS = 5000;
     
-    // Multi-Stage Sensor Reading
-    static constexpr uint32_t FAST_SLEEP_SEC = 60;         // 1 phút cho chu kỳ đọc pH
-    static constexpr uint32_t FULL_READ_INTERVAL = 6;      // Đọc tất cả sensors mỗi 6 chu kỳ (6 phút)
+    // BACKUP - Multi-Stage Sensor Reading (không dùng, giữ lại để sau có thể enable)
+    // static constexpr uint32_t FAST_SLEEP_SEC = 60;
+    // static constexpr uint32_t FULL_READ_INTERVAL = 6;
     
     // DS3231 RTC pins (đổi sang GPIO an toàn)
     static constexpr gpio_num_t RTC_SDA_PIN = GPIO_NUM_3;  // Standard I2C SDA

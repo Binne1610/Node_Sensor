@@ -13,7 +13,8 @@ static const char* TAG = "SYS_MANAGER";
 RTC_DATA_ATTR static uint32_t rtc_boot_count = 0;
 RTC_DATA_ATTR static uint32_t rtc_error_count = 0;
 RTC_DATA_ATTR static SystemState rtc_last_state = SystemState::INIT;
-RTC_DATA_ATTR static uint32_t rtc_read_cycle_count = 0;  // Multi-Stage Reading cycle
+// BACKUP - Multi-Stage (không dùng, bỏ để sau này có thể enable lại)
+// RTC_DATA_ATTR static uint32_t rtc_read_cycle_count = 0;
 
 SystemManager::SystemManager() 
     : pH_sensor_(nullptr)
@@ -38,8 +39,8 @@ SystemManager::SystemManager()
     // DEBUG: Log chi tiết wakeup reason
     ESP_LOGI(TAG, "=== WAKEUP REASON DEBUG ===");
     ESP_LOGI(TAG, "esp_sleep_get_wakeup_cause() = %d", wakeup_reason);
-    ESP_LOGI(TAG, "RTC memory RAW: boot=%lu, cycle=%lu, error=%lu", 
-             rtc_boot_count, rtc_read_cycle_count, rtc_error_count);
+    ESP_LOGI(TAG, "RTC memory RAW: boot=%lu, error=%lu", 
+             rtc_boot_count, rtc_error_count);
     
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_UNDEFINED:
@@ -60,13 +61,12 @@ SystemManager::SystemManager()
     }
     
     if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER && wakeup_reason != ESP_SLEEP_WAKEUP_EXT0) {
-        // First boot - reset cycle count
+        // First boot - reset RTC memory
         ESP_LOGI(TAG, "[ACTION] First boot/reset detected - RESETTING RTC memory to 0");
-        rtc_read_cycle_count = 0;
         rtc_boot_count = 0;
         rtc_error_count = 0;
     } else {
-        ESP_LOGI(TAG, "[ACTION] Deep sleep wakeup - PRESERVING RTC memory (Cycle: %lu)", rtc_read_cycle_count);
+        ESP_LOGI(TAG, "[ACTION] Deep sleep wakeup - PRESERVING RTC memory");
     }
     
     // Khôi phục context từ RTC memory
@@ -77,18 +77,10 @@ SystemManager::SystemManager()
     context_.last_error = ErrorType::NONE;
     context_.sleep_interval_sec = DEFAULT_SLEEP_SEC;
     
-    // Multi-Stage Sensor Reading
-    context_.read_cycle_count = rtc_read_cycle_count;
-    context_.read_full_sensors = (context_.read_cycle_count % FULL_READ_INTERVAL == 0);
-    
     ESP_LOGI(TAG, "=== SYSTEM MANAGER CREATED ===");
-    ESP_LOGI(TAG, "Boot: %lu, Cycle: %lu (%lu %% %d = %lu)", 
-             context_.boot_count, context_.read_cycle_count,
-             context_.read_cycle_count, FULL_READ_INTERVAL, 
-             context_.read_cycle_count % FULL_READ_INTERVAL);
-    ESP_LOGI(TAG, "Full read: %s (wakeup_reason=%d)", 
-             context_.read_full_sensors ? "YES (Type F)" : "NO - pH only (Type P)",
-             wakeup_reason);
+    ESP_LOGI(TAG, "Boot: %lu (wakeup_reason=%d)", 
+             context_.boot_count, wakeup_reason);
+    ESP_LOGI(TAG, "Mode: Always read ALL sensors (no multi-stage)");
 }
 
 SystemManager::~SystemManager() {
@@ -286,24 +278,6 @@ esp_err_t SystemManager::handle_send_data_state() {
 esp_err_t SystemManager::handle_sleep_state() {
     ESP_LOGI(TAG, "[SLEEP] Entering deep sleep for %lu seconds", context_.sleep_interval_sec);
     
-    ESP_LOGI(TAG, "[DEBUG] BEFORE increment: cycle=%lu, rtc_cycle=%lu", 
-             context_.read_cycle_count, rtc_read_cycle_count);
-    
-    // Increment cycle count và cập nhật flag cho lần wake tiếp theo
-    context_.read_cycle_count++;
-    context_.read_full_sensors = (context_.read_cycle_count % FULL_READ_INTERVAL == 0);
-    
-    // Lưu vào RTC memory
-    rtc_read_cycle_count = context_.read_cycle_count;
-    
-    ESP_LOGI(TAG, "[DEBUG] AFTER save: cycle=%lu, rtc_cycle=%lu, next_full=%s", 
-             context_.read_cycle_count, rtc_read_cycle_count,
-             context_.read_full_sensors ? "YES" : "NO");
-    
-    ESP_LOGI(TAG, "Next cycle: %lu, Will read: %s", 
-             context_.read_cycle_count,
-             context_.read_full_sensors ? "ALL sensors" : "pH only");
-    
     // Lưu state vào RTC memory
     rtc_last_state = SystemState::READ_SENSORS; // Sau khi wake sẽ đọc sensor
     rtc_error_count = context_.error_count;
@@ -337,63 +311,40 @@ esp_err_t SystemManager::handle_error_recovery_state() {
 }
 
 esp_err_t SystemManager::read_all_sensors() {
-    esp_err_t ret = ESP_OK;
-    int success_count = 0;
-    int total_sensors = 1;  // pH luôn đọc
+    ESP_LOGI(TAG, "[READING] Reading ALL sensors...");
     
-    // Luôn đọc pH (thay đổi nhanh)
+    // Đọc pH
     if (pH_sensor_->read_PH(pH_value_) == ESP_OK) {
         ESP_LOGI(TAG, "pH: %.2f", pH_value_);
-        success_count++;
     } else {
         ESP_LOGW(TAG, "pH read failed");
-        ret = ESP_FAIL;
     }
+    vTaskDelay(pdMS_TO_TICKS(100));  // Delay 100ms giữa các lần đọc
     
-    // Chỉ đọc các sensor còn lại khi đủ chu kỳ (thay đổi chậm)
-    if (context_.read_full_sensors) {
-        total_sensors = 4;
-        ESP_LOGI(TAG, "[FULL READ] Reading all sensors...");
-        
-        // Đọc THEC
-        if (thec_sensor_->read_THEC(temp_value_, rh_value_, ec_value_) == ESP_OK) {
-            ESP_LOGI(TAG, "THEC: T=%.1f°C, RH=%.1f%%, EC=%.1f", temp_value_, rh_value_, ec_value_);
-            success_count++;
-        } else {
-            ESP_LOGW(TAG, "THEC read failed");
-            ret = ESP_FAIL;
-        }
-        
-        // Đọc NPK
-        if (npk_sensor_->read_NPK(n_value_, p_value_, k_value_) == ESP_OK) {
-            ESP_LOGI(TAG, "NPK: N=%.0f, P=%.0f, K=%.0f", n_value_, p_value_, k_value_);
-            success_count++;
-        } else {
-            ESP_LOGW(TAG, "NPK read failed");
-            ret = ESP_FAIL;
-        }
-        
-        // Đọc SW
-        if (sw_sensor_->read_ES35_SW(sw_temp_value_, sw_rh_value_) == ESP_OK) {
-            ESP_LOGI(TAG, "SW: T=%.1f°C, RH=%.1f%%", sw_temp_value_, sw_rh_value_);
-            success_count++;
-        } else {
-            ESP_LOGW(TAG, "SW read failed");
-            ret = ESP_FAIL;
-        }
+    // Đọc THEC
+    if (thec_sensor_->read_THEC(temp_value_, rh_value_, ec_value_) == ESP_OK) {
+        ESP_LOGI(TAG, "THEC: T=%.1f°C, RH=%.1f%%, EC=%.1f", temp_value_, rh_value_, ec_value_);
     } else {
-        ESP_LOGI(TAG, "[FAST READ] pH only (cycle %lu/%lu)", 
-                 context_.read_cycle_count % FULL_READ_INTERVAL + 1, FULL_READ_INTERVAL);
+        ESP_LOGW(TAG, "THEC read failed");
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));  // Delay 100ms giữa các lần đọc
+    
+    // Đọc NPK
+    if (npk_sensor_->read_NPK(n_value_, p_value_, k_value_) == ESP_OK) {
+        ESP_LOGI(TAG, "NPK: N=%.0f, P=%.0f, K=%.0f", n_value_, p_value_, k_value_);
+    } else {
+        ESP_LOGW(TAG, "NPK read failed");
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));  // Delay 100ms giữa các lần đọc
+    
+    // Đọc SW
+    if (sw_sensor_->read_ES35_SW(sw_temp_value_, sw_rh_value_) == ESP_OK) {
+        ESP_LOGI(TAG, "SW: T=%.1f°C, RH=%.1f%%", sw_temp_value_, sw_rh_value_);
+    } else {
+        ESP_LOGW(TAG, "SW read failed");
     }
     
-    // Chấp nhận nếu ít nhất 50% sensor đọc được
-    int min_success = (total_sensors + 1) / 2;  // pH-only: 1/1, Full: 2/4
-    if (success_count >= min_success) {
-        ESP_LOGI(TAG, "Sensor read OK (%d/%d sensors)", success_count, total_sensors);
-        return ESP_OK;
-    }
-    
-    return ret;
+    return ESP_OK;
 }
 
 esp_err_t SystemManager::build_and_send_lora_packet() {
@@ -410,16 +361,13 @@ esp_err_t SystemManager::build_and_send_lora_packet() {
         }
     }
     
-    // Format packet với type flag (P=partial/pH-only, F=full)
-    const char* packet_type = context_.read_full_sensors ? "F" : "P";
-    
+    // Format LoRa packet (luôn gửi tất cả sensors)
     snprintf(data, sizeof(data), 
-             "type:%s;pH:%.2f;T:%.1f;RH:%.1f;EC:%.1f;N:%.0f;P:%.0f;K:%.0f;SW_T:%.1f;SW_RH:%.1f;time:%s;boot:%lu;cycle:%lu",
-             packet_type,
+             "pH:%.2f;T:%.1f;RH:%.1f;EC:%.1f;N:%.0f;P:%.0f;K:%.0f;SW_T:%.1f;SW_RH:%.1f;time:%s;boot:%lu",
              pH_value_, temp_value_, rh_value_, ec_value_,
              n_value_, p_value_, k_value_,
              sw_temp_value_, sw_rh_value_,
-             timestamp, context_.boot_count, context_.read_cycle_count);
+             timestamp, context_.boot_count);
     
     ESP_LOGI(TAG, "LoRa data: %s", data);
     
@@ -461,7 +409,7 @@ void SystemManager::enter_deep_sleep() {
     
     ESP_LOGI(TAG, "=== DEEP SLEEP DEBUG ===");
     ESP_LOGI(TAG, "Sleep time: %lu seconds (%llu us)", context_.sleep_interval_sec, sleep_time_us);
-    ESP_LOGI(TAG, "RTC memory - Boot: %lu, Cycle: %lu", rtc_boot_count, rtc_read_cycle_count);
+    ESP_LOGI(TAG, "RTC memory - Boot: %lu", rtc_boot_count);
     ESP_LOGI(TAG, "Goodbye! Entering deep sleep NOW...");
     
     vTaskDelay(pdMS_TO_TICKS(200)); // Tăng delay để log flush hoàn toàn
